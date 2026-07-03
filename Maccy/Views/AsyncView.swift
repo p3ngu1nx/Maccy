@@ -46,13 +46,14 @@ struct AsyncView<Value, Content: View, Placeholder: View>: View {
         content(value)
       }
     }.task(id: taskId) {
+      viewState = .loading
       do {
         let result = try await operation()
+        guard !Task.isCancelled else { return }
         viewState = .loaded(result)
       } catch {
-        if case .loading = viewState {
-          viewState = .failed
-        }
+        guard !Task.isCancelled else { return }
+        viewState = .failed
       }
     }
   }

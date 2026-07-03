@@ -49,6 +49,10 @@ struct PreviewItemView: View {
             }
           }
         }
+        .onDisappear {
+          item.cancelPreviewImageGeneration()
+        }
+        .id(item.id)
       } else {
         AsyncView<String, _, _>(id: item.id) {
           return await item.asyncGetPreviewText()

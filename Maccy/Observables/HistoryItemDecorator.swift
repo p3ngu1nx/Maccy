@@ -4,6 +4,22 @@ import Foundation
 import Observation
 import Sauce
 
+private actor ImageGenerationQueue {
+  static let previews = ImageGenerationQueue()
+  static let thumbnails = ImageGenerationQueue()
+
+  func resizedImage(data: Data, targetSize: NSSize) -> NSImage? {
+    guard !Task.isCancelled else { return nil }
+    guard let nsImage = NSImage(data: data) else { return nil }
+    guard !Task.isCancelled else { return nil }
+
+    let resized = nsImage.resized(to: targetSize)
+    guard !Task.isCancelled else { return nil }
+
+    return resized
+  }
+}
+
 @Observable
 class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
   static func == (lhs: HistoryItemDecorator, rhs: HistoryItemDecorator) -> Bool {
@@ -39,12 +55,15 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
     return url.deletingPathExtension().lastPathComponent
   }
 
-  var hasImage: Bool { item.imageData != nil }
+  var hasImage: Bool { item.hasStoredImageData }
 
-  var previewImageGenerationTask: Task<Void, Never>?
-  var thumbnailImageGenerationTask: Task<Void, Never>?
+  @ObservationIgnored var previewImageGenerationTask: Task<Void, Never>?
+  @ObservationIgnored var thumbnailImageGenerationTask: Task<Void, Never>?
+  @ObservationIgnored private var previewImageGenerationID: UUID?
+  @ObservationIgnored private var thumbnailImageGenerationID: UUID?
   var previewImage: NSImage?
   var thumbnailImage: NSImage?
+  var accessoryImage: NSImage?
   var applicationImage: ApplicationImage
 
   // 10k characters seems to be more than enough on large displays
@@ -102,7 +121,7 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
   var isUnpinned: Bool { item.pin == nil }
 
   func hash(into hasher: inout Hasher) {
-    // We need to hash title and attributedTitle, so SwiftUI knows it needs to update the view if they chage
+    // Keep mutated titles visible in SwiftUI after pasteboard content is normalized.
     hasher.combine(id)
     hasher.combine(title)
     hasher.combine(attributedTitle)
@@ -114,6 +133,7 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
     self.item = item
     self.shortcuts = shortcuts
     self.title = item.title
+    self.accessoryImage = ColorImage.from(item.title)
     self.applicationImage = ApplicationImageCache.shared.getImage(item: item)
 
     synchronizeItemPin()
@@ -122,7 +142,7 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
 
   @MainActor
   func ensureThumbnailImage() {
-    guard let data = item.imageData else {
+    guard let data = item.storedImageData else {
       return
     }
     guard thumbnailImage == nil else {
@@ -132,18 +152,26 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
       return
     }
     let targetSize = HistoryItemDecorator.thumbnailImageSize
-    thumbnailImageGenerationTask = Task.detached { [weak self] in
-      guard let nsImage = NSImage(data: data) else { return }
-      let resized = nsImage.resized(to: targetSize)
+    let generationID = UUID()
+    thumbnailImageGenerationID = generationID
+    thumbnailImageGenerationTask = Task.detached(priority: .utility) { [weak self] in
+      let resized = await ImageGenerationQueue.thumbnails.resizedImage(data: data, targetSize: targetSize)
+      let shouldApply = !Task.isCancelled
       await MainActor.run {
-        self?.thumbnailImage = resized
+        guard let self, self.thumbnailImageGenerationID == generationID else { return }
+
+        self.thumbnailImageGenerationTask = nil
+        self.thumbnailImageGenerationID = nil
+
+        guard shouldApply, let resized else { return }
+        self.thumbnailImage = resized
       }
     }
   }
 
   @MainActor
   func ensurePreviewImage() {
-    guard let data = item.imageData else {
+    guard let data = item.storedImageData else {
       return
     }
     guard previewImage == nil else {
@@ -153,11 +181,19 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
       return
     }
     let targetSize = HistoryItemDecorator.previewImageSize
-    previewImageGenerationTask = Task.detached { [weak self] in
-      guard let nsImage = NSImage(data: data) else { return }
-      let resized = nsImage.resized(to: targetSize)
+    let generationID = UUID()
+    previewImageGenerationID = generationID
+    previewImageGenerationTask = Task.detached(priority: .userInitiated) { [weak self] in
+      let resized = await ImageGenerationQueue.previews.resizedImage(data: data, targetSize: targetSize)
+      let shouldApply = !Task.isCancelled
       await MainActor.run {
-        self?.previewImage = resized
+        guard let self, self.previewImageGenerationID == generationID else { return }
+
+        self.previewImageGenerationTask = nil
+        self.previewImageGenerationID = nil
+
+        guard shouldApply, let resized else { return }
+        self.previewImage = resized
       }
     }
   }
@@ -176,10 +212,30 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
   func cleanupImages() {
     thumbnailImageGenerationTask?.cancel()
     previewImageGenerationTask?.cancel()
+    thumbnailImageGenerationTask = nil
+    previewImageGenerationTask = nil
+    thumbnailImageGenerationID = nil
+    previewImageGenerationID = nil
     thumbnailImage?.recache()
     previewImage?.recache()
     thumbnailImage = nil
     previewImage = nil
+  }
+
+  @MainActor
+  func cancelThumbnailImageGeneration() {
+    guard thumbnailImage == nil else { return }
+    thumbnailImageGenerationTask?.cancel()
+    thumbnailImageGenerationTask = nil
+    thumbnailImageGenerationID = nil
+  }
+
+  @MainActor
+  func cancelPreviewImageGeneration() {
+    guard previewImage == nil else { return }
+    previewImageGenerationTask?.cancel()
+    previewImageGenerationTask = nil
+    previewImageGenerationID = nil
   }
 
   @MainActor
@@ -244,6 +300,7 @@ class HistoryItemDecorator: Identifiable, Hashable, HasVisibility {
     } onChange: {
       DispatchQueue.main.async {
         self.title = self.item.title
+        self.accessoryImage = ColorImage.from(self.item.title)
         self.synchronizeItemTitle()
       }
     }

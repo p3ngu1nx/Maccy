@@ -3,18 +3,60 @@ import Defaults
 @testable import Maccy
 
 @MainActor
-class HistoryItemDecoratorTests: XCTestCase {
-  let boldFont = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+class HistoryPinnedDuplicateTests: XCTestCase {
+  func testAddingDuplicatePinnedItemAfterLimitDoesNotCrash() {
+    let savedSize = Defaults[.size]
+    let savedPinTo = Defaults[.pinTo]
+    let history = History.shared
+    history.clearAll()
+    Defaults[.size] = 1
+    Defaults[.pinTo] = .bottom
+    defer {
+      history.clearAll()
+      Defaults[.size] = savedSize
+      Defaults[.pinTo] = savedPinTo
+    }
+
+    let pinned = history.add(historyItem("pinned"))
+    pinned.togglePin()
+    history.add(historyItem("0"))
+
+    let duplicate = history.add(historyItem("pinned"))
+
+    XCTAssertEqual(duplicate.item.pin, pinned.item.pin)
+    XCTAssertEqual(history.all, [duplicate])
+    XCTAssertEqual(history.items, [duplicate])
+  }
+
+  private func historyItem(_ value: String) -> HistoryItem {
+    let contents = [
+      HistoryItemContent(
+        type: NSPasteboard.PasteboardType.string.rawValue,
+        value: value.data(using: .utf8)
+      )
+    ]
+    let item = HistoryItem()
+    Storage.shared.context.insert(item)
+    item.contents = contents
+    item.numberOfCopies = 1
+    item.title = item.generateTitle()
+
+    return item
+  }
+}
+
+@MainActor
+class HistoryItemDecoratorTestCase: XCTestCase {
   let savedHighlightMatch = Defaults[.highlightMatch]
   let savedImageMaxHeight = Defaults[.imageMaxHeight]
 
-  var firstCopiedAt: Date! {
+  private var firstCopiedAt: Date! {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
     return formatter.date(from: "2020/07/10 12:31:34")
   }
 
-  var lastCopiedAt: Date! {
+  private var lastCopiedAt: Date! {
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
     return formatter.date(from: "2020/07/10 12:41:34")
@@ -32,6 +74,126 @@ class HistoryItemDecoratorTests: XCTestCase {
     Defaults[.highlightMatch] = savedHighlightMatch
   }
 
+  func historyItemDecorator(
+    _ value: String?,
+    application: String? = "com.apple.finder"
+  ) -> HistoryItemDecorator {
+    let contents = [
+      HistoryItemContent(
+        type: NSPasteboard.PasteboardType.string.rawValue,
+        value: value?.data(using: .utf8)
+      )
+    ]
+    let item = HistoryItem()
+    Storage.shared.context.insert(item)
+    item.contents = contents
+    item.title = item.generateTitle()
+    item.application = application
+    item.firstCopiedAt = firstCopiedAt
+    item.lastCopiedAt = lastCopiedAt
+
+    return HistoryItemDecorator(item)
+  }
+
+  func historyItemDecorator(
+    _ value: Data?,
+    _ type: NSPasteboard.PasteboardType
+  ) -> HistoryItemDecorator {
+    let contents = [
+      HistoryItemContent(
+        type: type.rawValue,
+        value: value
+      )
+    ]
+    let item = HistoryItem()
+    Storage.shared.context.insert(item)
+    item.contents = contents
+    item.title = item.generateTitle()
+    item.application = "com.apple.finder"
+    item.firstCopiedAt = firstCopiedAt
+    item.lastCopiedAt = lastCopiedAt
+    item.numberOfCopies = 2
+
+    return HistoryItemDecorator(item)
+  }
+
+  func historyItemDecorator(_ value: NSImage) -> HistoryItemDecorator {
+    let contents = [
+      HistoryItemContent(
+        type: NSPasteboard.PasteboardType.tiff.rawValue,
+        value: value.tiffRepresentation!
+      )
+    ]
+    let item = HistoryItem()
+    Storage.shared.context.insert(item)
+    item.contents = contents
+    item.title = item.generateTitle()
+    item.application = "com.apple.finder"
+    item.firstCopiedAt = firstCopiedAt
+    item.lastCopiedAt = lastCopiedAt
+    item.numberOfCopies = 2
+
+    return HistoryItemDecorator(item)
+  }
+
+  func historyItemDecorator(_ value: URL) -> HistoryItemDecorator {
+    let contents = [
+      HistoryItemContent(
+        type: NSPasteboard.PasteboardType.fileURL.rawValue,
+        value: value.dataRepresentation
+      ),
+      HistoryItemContent(
+        type: NSPasteboard.PasteboardType.string.rawValue,
+        value: value.lastPathComponent.data(using: .utf8)
+      )
+    ]
+    let item = HistoryItem()
+    Storage.shared.context.insert(item)
+    item.contents = contents
+    item.title = item.generateTitle()
+    item.application = "com.apple.finder"
+    item.firstCopiedAt = firstCopiedAt
+    item.lastCopiedAt = lastCopiedAt
+    item.numberOfCopies = 2
+
+    return HistoryItemDecorator(item)
+  }
+
+  func historyItemDecorator(universalClipboardImageURL url: URL) -> HistoryItemDecorator {
+    let contents = [
+      HistoryItemContent(
+        type: NSPasteboard.PasteboardType.fileURL.rawValue,
+        value: url.dataRepresentation
+      ),
+      HistoryItemContent(
+        type: NSPasteboard.PasteboardType.universalClipboard.rawValue,
+        value: "".data(using: .utf8)
+      )
+    ]
+    let item = HistoryItem()
+    Storage.shared.context.insert(item)
+    item.contents = contents
+    item.title = item.generateTitle()
+    item.application = "com.apple.finder"
+    item.firstCopiedAt = firstCopiedAt
+    item.lastCopiedAt = lastCopiedAt
+    item.numberOfCopies = 2
+
+    return HistoryItemDecorator(item)
+  }
+
+  // swiftlint:disable:next identifier_name
+  func range(from: Int, to: Int, in item: HistoryItemDecorator) -> Range<String.Index> {
+    let startIndex = item.title.startIndex
+    let lowerBound = item.title.index(startIndex, offsetBy: from)
+    let upperBound = item.title.index(startIndex, offsetBy: to + 1)
+
+    return lowerBound..<upperBound
+  }
+}
+
+@MainActor
+class HistoryItemDecoratorTests: HistoryItemDecoratorTestCase {
   func testString() {
     let title = "foo"
     let itemDecorator = historyItemDecorator(title)
@@ -57,32 +219,6 @@ class HistoryItemDecoratorTests: XCTestCase {
     XCTAssertEqual(itemDecorator.title, "foo")
     XCTAssertNil(itemDecorator.previewImage)
     XCTAssertNil(itemDecorator.thumbnailImage)
-  }
-
-  func testImage() async {
-    let image = NSImage(named: "StatusBarMenuImage")!
-    let itemDecorator = historyItemDecorator(image)
-    itemDecorator.sizeImages()
-    await itemDecorator.previewImageGenerationTask?.value
-    await itemDecorator.thumbnailImageGenerationTask?.value
-    XCTAssertEqual(itemDecorator.title, "")
-    XCTAssertEqual(itemDecorator.previewImage!.size, image.size)
-    XCTAssertEqual(itemDecorator.thumbnailImage!.size, image.size)
-  }
-
-  // We also need to add test for image with width bigger than max width.
-  func testImageWithHeightBiggerThanMaxHeight() async {
-    let image = NSImage(named: "NSApplicationIcon")!
-    let itemDecorator = historyItemDecorator(image)
-    itemDecorator.sizeImages()
-    await itemDecorator.thumbnailImageGenerationTask?.value
-    XCTAssertEqual(itemDecorator.thumbnailImage!.size, NSSize(width: 40, height: 40))
-  }
-
-  func testHasImage() {
-    let image = NSImage(named: "StatusBarMenuImage")!
-    let itemDecorator = historyItemDecorator(image)
-    XCTAssertTrue(itemDecorator.hasImage)
   }
 
   func testHasNoImage() {
@@ -160,98 +296,68 @@ class HistoryItemDecoratorTests: XCTestCase {
     itemDecorator.highlight("", [])
     XCTAssertEqual(itemDecorator.attributedTitle, nil)
   }
+}
 
-  private func historyItemDecorator(
-    _ value: String?,
-    application: String? = "com.apple.finder"
-  ) -> HistoryItemDecorator {
-    let contents = [
-      HistoryItemContent(
-        type: NSPasteboard.PasteboardType.string.rawValue,
-        value: value?.data(using: .utf8)
-      )
-    ]
-    let item = HistoryItem()
-    Storage.shared.context.insert(item)
-    item.contents = contents
-    item.title = item.generateTitle()
-    item.application = application
-    item.firstCopiedAt = firstCopiedAt
-    item.lastCopiedAt = lastCopiedAt
-
-    return HistoryItemDecorator(item)
+@MainActor
+class HistoryItemDecoratorImageTests: HistoryItemDecoratorTestCase {
+  func testImage() async {
+    let image = NSImage(named: "StatusBarMenuImage")!
+    let itemDecorator = historyItemDecorator(image)
+    itemDecorator.sizeImages()
+    await itemDecorator.previewImageGenerationTask?.value
+    await itemDecorator.thumbnailImageGenerationTask?.value
+    XCTAssertEqual(itemDecorator.title, "")
+    XCTAssertEqual(itemDecorator.previewImage!.size, image.size)
+    XCTAssertEqual(itemDecorator.thumbnailImage!.size, image.size)
   }
 
-  private func historyItemDecorator(
-    _ value: Data?,
-    _ type: NSPasteboard.PasteboardType
-  ) -> HistoryItemDecorator {
-    let contents = [
-      HistoryItemContent(
-        type: type.rawValue,
-        value: value
-      )
-    ]
-    let item = HistoryItem()
-    Storage.shared.context.insert(item)
-    item.contents = contents
-    item.title = item.generateTitle()
-    item.application = "com.apple.finder"
-    item.firstCopiedAt = firstCopiedAt
-    item.lastCopiedAt = lastCopiedAt
-    item.numberOfCopies = 2
-
-    return HistoryItemDecorator(item)
+  // We also need to add test for image with width bigger than max width.
+  func testImageWithHeightBiggerThanMaxHeight() async {
+    let image = NSImage(named: "NSApplicationIcon")!
+    let itemDecorator = historyItemDecorator(image)
+    itemDecorator.sizeImages()
+    await itemDecorator.thumbnailImageGenerationTask?.value
+    XCTAssertEqual(itemDecorator.thumbnailImage!.size, NSSize(width: 40, height: 40))
   }
 
-  private func historyItemDecorator(_ value: NSImage) -> HistoryItemDecorator {
-    let contents = [
-      HistoryItemContent(
-        type: NSPasteboard.PasteboardType.tiff.rawValue,
-        value: value.tiffRepresentation!
-      )
-    ]
-    let item = HistoryItem()
-    Storage.shared.context.insert(item)
-    item.contents = contents
-    item.title = item.generateTitle()
-    item.application = "com.apple.finder"
-    item.firstCopiedAt = firstCopiedAt
-    item.lastCopiedAt = lastCopiedAt
-    item.numberOfCopies = 2
-
-    return HistoryItemDecorator(item)
+  func testHasImage() {
+    let image = NSImage(named: "StatusBarMenuImage")!
+    let itemDecorator = historyItemDecorator(image)
+    XCTAssertTrue(itemDecorator.hasImage)
   }
 
-  private func historyItemDecorator(_ value: URL) -> HistoryItemDecorator {
-    let contents = [
-      HistoryItemContent(
-        type: NSPasteboard.PasteboardType.fileURL.rawValue,
-        value: value.dataRepresentation
-      ),
-      HistoryItemContent(
-        type: NSPasteboard.PasteboardType.string.rawValue,
-        value: value.lastPathComponent.data(using: .utf8)
-      )
-    ]
-    let item = HistoryItem()
-    Storage.shared.context.insert(item)
-    item.contents = contents
-    item.title = item.generateTitle()
-    item.application = "com.apple.finder"
-    item.firstCopiedAt = firstCopiedAt
-    item.lastCopiedAt = lastCopiedAt
-    item.numberOfCopies = 2
+  func testPreviewImageGenerationCanRestartAfterCancellation() async {
+    let image = NSImage(named: "NSApplicationIcon")!
+    let itemDecorator = historyItemDecorator(image)
+    itemDecorator.ensurePreviewImage()
+    itemDecorator.cancelPreviewImageGeneration()
 
-    return HistoryItemDecorator(item)
+    let previewImage = await itemDecorator.asyncGetPreviewImage()
+
+    XCTAssertNotNil(previewImage)
   }
 
-  // swiftlint:disable:next identifier_name
-  private func range(from: Int, to: Int, in item: HistoryItemDecorator) -> Range<String.Index> {
-    let startIndex = item.title.startIndex
-    let lowerBound = item.title.index(startIndex, offsetBy: from)
-    let upperBound = item.title.index(startIndex, offsetBy: to + 1)
+  func testThumbnailImageGenerationCanRestartAfterCancellation() async {
+    let image = NSImage(named: "NSApplicationIcon")!
+    let itemDecorator = historyItemDecorator(image)
+    itemDecorator.ensureThumbnailImage()
+    itemDecorator.cancelThumbnailImageGeneration()
 
-    return lowerBound..<upperBound
+    itemDecorator.ensureThumbnailImage()
+    await itemDecorator.thumbnailImageGenerationTask?.value
+
+    XCTAssertNotNil(itemDecorator.thumbnailImage)
+  }
+
+  func testUniversalClipboardImageFileURLIsNotListImage() async {
+    let url = Bundle(for: type(of: self)).url(forResource: "guy", withExtension: "jpeg")!
+    let itemDecorator = historyItemDecorator(universalClipboardImageURL: url)
+    XCTAssertFalse(itemDecorator.hasImage)
+
+    itemDecorator.sizeImages()
+    await itemDecorator.previewImageGenerationTask?.value
+    await itemDecorator.thumbnailImageGenerationTask?.value
+    XCTAssertNil(itemDecorator.previewImage)
+    XCTAssertNil(itemDecorator.thumbnailImage)
   }
 }
